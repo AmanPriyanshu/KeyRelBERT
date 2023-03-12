@@ -407,11 +407,16 @@ class KeyRelBERT:
             words = count.get_feature_names_out()
         else:
             words = count.get_feature_names()
+        words = words.tolist()
         if if_use_rank_ids:
             doc_embeddings = doc_embeddings.repeat(self.relation_embeddings.shape[0], 1)
         relations = {}
-        for idx, (word_a, w_embedding_a) in tqdm(enumerate(zip(words, word_embeddings)), total=len(words), desc="extracting_relations", disable=not verbose):
-            for word_b, w_embedding_b in zip(words[idx+1:], word_embeddings[idx+1:]):
+        for idx_a in tqdm(range(len(keywords)), desc="extracting_relations", disable=not verbose):
+            word_a = keywords[idx_a][0]
+            w_embedding_a = word_embeddings[words.index(word_a)]
+            for idx_b in range(len(keywords))[idx_a+1:]:
+                word_b = keywords[idx_b][0]
+                w_embedding_b = word_embeddings[words.index(word_b)]
                 relation_sent = (w_embedding_a.repeat(self.relation_embeddings.shape[0], 1)*1+self.relation_embeddings+w_embedding_b.repeat(self.relation_embeddings.shape[0], 1)*1)/(1+2*1)
                 if if_use_rank_ids:
                     ranked_ids = self.backpropogate_and_get_words(docs, (w_embedding_a+w_embedding_b)/2)
