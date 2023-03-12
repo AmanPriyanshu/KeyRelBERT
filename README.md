@@ -3,7 +3,7 @@ KeyRelBERT is a streamlined pipeline for keyword extraction and relation extract
 
 ## Usage
 
-The most minimal example can be seen below for the extraction of keywords:
+A basic example can be seen below for keyword extraction and relation extraction:
 ```python
 from keyrelbert import KeyRelBERT
 
