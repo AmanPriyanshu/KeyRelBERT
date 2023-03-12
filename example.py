@@ -29,3 +29,4 @@ relations = keyphrase_extractor.extract_relations(doc,
     word_embeddings=word_embeddings,
     keyphrase_ngram_range=keyphrase_ngram_range,
     )
+print(relations)

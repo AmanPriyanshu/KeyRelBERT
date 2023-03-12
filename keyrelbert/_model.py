@@ -4,6 +4,7 @@ warnings.filterwarnings("ignore", category=FutureWarning)
 
 import numpy as np
 from typing import List, Union, Tuple
+import string
 
 from packaging import version
 from sklearn import __version__ as sklearn_version
@@ -15,7 +16,7 @@ from keyrelbert._maxsum import max_sum_distance
 from keyrelbert._highlight import highlight_document
 from keyrelbert.backend._utils import select_backend
 import torch
-
+from tqdm import tqdm
 
 class KeyRelBERT:
     """
@@ -55,7 +56,12 @@ class KeyRelBERT:
         """
         self.model = select_backend(model)
         self.criterion = torch.nn.CosineEmbeddingLoss()
+        self.relations = ['located in the administrative territorial entity', 'parent organization', 'publication date', 'religion', 'alternate name', 'continent', 'instance of', 'replaced by', 'official language', 'narrative location', 'killed by', 'genre', 'charge', 'ethnicity', 'occupation', 'basin country', 'work location', 'denonym', 'member of sports team', 'participant', 'languages spoken, written or signed', 'head of state', 'production company', 'position held', 'member count', 'developer', 'spouse', 'product or material produced', 'founded by', 'operator', 'sibling', 'notable work', 'major shareholder', 'age', 'state of headquarters', 'participant of', 'unemployment rate', 'original language of work', 'present in work', 'award received', 'dissolved, abolished or demolished', 'country of headquarters', 'educated at', 'head of government', 'producer', 'series', 'applies to jurisdiction', 'residence', 'military branch', 'country of citizenship', 'publisher', 'country of origin', 'advisors', 'part of', 'identity', 'location of formation', 'located on terrain feature', 'employer', 'has member', 'father', 'inception', 'member of political party', 'state of birth', 'country of residence', 'relative', 'country of death', 'member of', 'start time', 'creator', 'mouth of the watercourse', 'composer', 'league', 'follows', 'country', 'website', 'top members', 'city of residence', 'territory claimed by', 'contains administrative territorial entity', 'owned by', 'followed by', 'subclass of', 'headquarters location', 'dissolved', 'ethnic group', 'neighborhood of', 'chairperson', 'platform', 'located in or next to body of water', 'date of birth', 'manufacturer', 'replaces', 'lyrics by', 'state of death', 'author', 'shareholders', 'country of birth', 'sister city', 'date of death', 'subsidiary', 'director', 'state of residence', 'record label', 'influenced by', 'capital of', 'performer', 'mother', 'has part', 'place of birth', 'original network', 'parent taxon', 'conflict', 'place of death', 'capital', 'screenwriter', 'end time', 'separated from', 'cause of death', 'affiliation', 'child', 'legislative body', 'no relation', 'point in time', 'characters', 'cast member', 'location', 'industry']
+        self.relation_embeddings = self.get_relation_embeddings()
 
+    def get_relation_embeddings(self):
+        return self.model.embed(self.relations)
+        
     def extract_keywords(
         self,
         docs: Union[str, List[str]],
@@ -377,6 +383,8 @@ class KeyRelBERT:
         stop_words: Union[str, List[str]] = "english",
         min_df: int = 1,
         vectorizer: CountVectorizer = None,
+        if_use_rank_ids = True,
+        verbose=True
     ):
         if isinstance(docs, str):
             if docs:
@@ -399,8 +407,29 @@ class KeyRelBERT:
             words = count.get_feature_names_out()
         else:
             words = count.get_feature_names()
-        for idx, (word_a, w_embedding_a) in enumerate(zip(words, word_embeddings)):
+        if if_use_rank_ids:
+            doc_embeddings = doc_embeddings.repeat(self.relation_embeddings.shape[0], 1)
+        relations = {}
+        for idx, (word_a, w_embedding_a) in tqdm(enumerate(zip(words, word_embeddings)), total=len(words), desc="extracting_relations", disable=not verbose):
             for word_b, w_embedding_b in zip(words[idx+1:], word_embeddings[idx+1:]):
-                ranked_ids = self.backpropogate_and_get_words(docs, (w_embedding_a+w_embedding_b)/2)
-                print(word_a, "::", word_b, self.model.embedding_model.tokenizer.convert_ids_to_tokens(ranked_ids))
-        exit()
+                relation_sent = (w_embedding_a.repeat(self.relation_embeddings.shape[0], 1)*1+self.relation_embeddings+w_embedding_b.repeat(self.relation_embeddings.shape[0], 1)*1)/(1+2*1)
+                if if_use_rank_ids:
+                    ranked_ids = self.backpropogate_and_get_words(docs, (w_embedding_a+w_embedding_b)/2)
+                    competent_words = " ".join([w for w in self.model.embedding_model.tokenizer.convert_ids_to_tokens(ranked_ids) if w not in string.punctuation])
+                    subset_a = word_a+" "+competent_words+" "+word_b
+                    subset_b = word_b+" "+competent_words+" "+word_b
+                    subset_embeddings = self.model.embed([subset_a, subset_b])
+                    subset_a, subset_b = subset_embeddings
+                    subset_a = subset_a.repeat(self.relation_embeddings.shape[0], 1)
+                    subset_b = subset_b.repeat(self.relation_embeddings.shape[0], 1)
+                    similarities_a = torch.nn.functional.cosine_similarity(subset_a, relation_sent, dim=1).numpy()
+                    similarities_b = torch.nn.functional.cosine_similarity(subset_b, relation_sent, dim=1).numpy()
+                    relation_a = self.relations[np.argmax(similarities_a)]
+                    relation_b = self.relations[np.argmax(similarities_b)]
+                else:
+                    similarities = torch.nn.functional.cosine_similarity(doc_embeddings, relation_sent, dim=1).numpy()
+                    relation_a = self.relations[np.argmax(similarities)]
+                    relation_b = relation_a
+                relations[word_a+":|:"+word_b] = relation_a
+                relations[word_b+":|:"+word_a] = relation_b
+        return relations
