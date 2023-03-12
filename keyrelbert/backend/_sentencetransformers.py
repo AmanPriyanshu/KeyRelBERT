@@ -1,8 +1,9 @@
 import numpy as np
 from typing import List, Union
 from sentence_transformers import SentenceTransformer
-
+import torch
 from keyrelbert.backend import BaseEmbedder
+from tqdm import trange
 
 
 class SentenceTransformerBackend(BaseEmbedder):
@@ -47,7 +48,7 @@ class SentenceTransformerBackend(BaseEmbedder):
                 "`model = SentenceTransformer('all-MiniLM-L6-v2')`"
             )
 
-    def embed(self, documents: List[str], verbose: bool = False) -> np.ndarray:
+    def embed(self, documents: List[str], verbose: bool = False, return_detached: bool = False, batch_size: int = 32) -> np.ndarray:
         """Embed a list of n documents/words into an n-dimensional
         matrix of embeddings
 
@@ -59,5 +60,28 @@ class SentenceTransformerBackend(BaseEmbedder):
             Document/words embeddings with shape (n, m) with `n` documents/words
             that each have an embeddings size of `m`
         """
-        embeddings = self.embedding_model.encode(documents, show_progress_bar=verbose)
-        return embeddings
+        if not return_detached:
+            embeddings = self.embedding_model.encode(documents, show_progress_bar=verbose, output_value=None)
+            embeddings = torch.stack([e['sentence_embedding'].detach() for e in embeddings])
+            return embeddings
+        else:
+            self.embedding_model.train()
+            self.embedding_model.to(self.embedding_model._target_device)
+            all_embeddings = []
+            sentences = documents
+            length_sorted_idx = np.argsort([-self.embedding_model._text_length(sen) for sen in sentences])
+            sentences_sorted = [sentences[idx] for idx in length_sorted_idx]
+            for start_index in trange(0, len(sentences), batch_size, desc="Batches", disable=not verbose):
+                sentences_batch = sentences_sorted[start_index:start_index+batch_size]
+                features = self.embedding_model.tokenize(sentences_batch)
+                for key in features:
+                    if isinstance(features[key], torch.Tensor):
+                        features[key] = features[key].to(self.embedding_model._target_device)
+                out_features = self.embedding_model.forward(features)
+                embeddings = []
+                for sent_idx in range(len(out_features['sentence_embedding'])):
+                    row =  {name: out_features[name][sent_idx] for name in out_features}
+                    embeddings.append(row)
+                all_embeddings.extend(embeddings)
+            all_embeddings = [all_embeddings[idx] for idx in np.argsort(length_sorted_idx)]
+            return all_embeddings

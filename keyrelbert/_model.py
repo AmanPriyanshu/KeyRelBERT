@@ -14,6 +14,7 @@ from keyrelbert._mmr import mmr
 from keyrelbert._maxsum import max_sum_distance
 from keyrelbert._highlight import highlight_document
 from keyrelbert.backend._utils import select_backend
+import torch
 
 
 class KeyRelBERT:
@@ -53,6 +54,7 @@ class KeyRelBERT:
                       * https://www.sbert.net/docs/pretrained_models.html
         """
         self.model = select_backend(model)
+        self.criterion = torch.nn.MSELoss()
 
     def extract_keywords(
         self,
@@ -180,6 +182,8 @@ class KeyRelBERT:
             doc_embeddings = self.model.embed(docs)
         if word_embeddings is None:
             word_embeddings = self.model.embed(words)
+        doc_embeddings = doc_embeddings.numpy()
+        word_embeddings = word_embeddings.numpy()
 
         # Guided KeyRelBert either local (keywords shared among documents) or global (keywords per document)
         if seed_keywords is not None:
@@ -330,8 +334,63 @@ class KeyRelBERT:
             words = count.get_feature_names_out()
         else:
             words = count.get_feature_names()
-
-        doc_embeddings = self.model.embed(docs)
         word_embeddings = self.model.embed(words)
+        doc_embeddings = self.model.embed(docs)
 
         return doc_embeddings, word_embeddings
+
+    def extract_relations(
+        self,
+        docs: Union[str, List[str]],
+        keywords: Union[List[Tuple[str, float]], List[List[Tuple[str, float]]]],
+        doc_embeddings: np.array = None,
+        word_embeddings: np.array = None,
+        candidates: List[str] = None,
+        keyphrase_ngram_range: Tuple[int, int] = (1, 1),
+        stop_words: Union[str, List[str]] = "english",
+        min_df: int = 1,
+        vectorizer: CountVectorizer = None,
+    ):
+        if isinstance(docs, str):
+            if docs:
+                docs = [docs]
+            else:
+                return []
+        if vectorizer:
+            count = vectorizer.fit(docs)
+        else:
+            try:
+                count = CountVectorizer(
+                    ngram_range=keyphrase_ngram_range,
+                    stop_words=stop_words,
+                    min_df=min_df,
+                    vocabulary=candidates,
+                ).fit(docs)
+            except ValueError:
+                return []
+        if version.parse(sklearn_version) >= version.parse("1.0.0"):
+            words = count.get_feature_names_out()
+        else:
+            words = count.get_feature_names()
+        for word in words:
+            self.model.embedding_model.zero_grad()
+            word_embedding_layer = self.model.embedding_model.get_submodule('0.auto_model.embeddings.word_embeddings')
+            output = self.model.embed(docs, return_detached=True)[0]
+            single_word_embeddings = output['sentence_embedding']
+            input_ids = output['input_ids']
+            loss = self.criterion(single_word_embeddings, torch.zeros(384))
+            loss.backward()
+            gradients = word_embedding_layer.weight.grad
+            gradients = torch.index_select(gradients, 0, input_ids)
+            gradients_columnar = torch.mean(gradients, 1), torch.std(gradients, 1)
+            gradients = gradients.transpose(0, 1)
+            gradients = (gradients - gradients_columnar[0])/gradients_columnar[1]
+            gradients = gradients.transpose(0, 1)
+            scores = torch.sum(torch.abs(gradients), 1)
+            print(scores)
+            exit()
+        exit()
+        print(type(word_embedding_layer.weight), word_embedding_layer.weight.grad)
+        print(len(words))
+        #print(docs, keywords, doc_embeddings.shape, word_embeddings.shape)
+        exit()
