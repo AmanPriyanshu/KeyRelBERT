@@ -1,5 +1,5 @@
 # KeyRelBERT
-KeyRelBERT is a minimal and easy-to-use keyword extraction and relation extraction technique that leverages BERT embeddings to create keywords and keyphrases that are most similar to a document & employs unsupervised clustering for relation extraction.
+KeyRelBERT is a streamlined pipeline for keyword extraction and relation extraction that leverages SentenceTransformers embeddings to expand keyword extraction & employs unsupervised similarity computation for relation extraction.
 
 ## Usage
 
