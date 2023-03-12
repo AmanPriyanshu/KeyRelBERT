@@ -54,7 +54,7 @@ class KeyRelBERT:
                       * https://www.sbert.net/docs/pretrained_models.html
         """
         self.model = select_backend(model)
-        self.criterion = torch.nn.MSELoss()
+        self.criterion = torch.nn.CosineEmbeddingLoss()
 
     def extract_keywords(
         self,
@@ -339,6 +339,33 @@ class KeyRelBERT:
 
         return doc_embeddings, word_embeddings
 
+    def backpropogate_and_get_words(self, docs, w_embedding):
+        self.model.embedding_model.zero_grad()
+        word_embedding_layer = self.model.embedding_model.get_submodule('0.auto_model.embeddings.word_embeddings')
+        output = self.model.embed(docs, return_detached=True)[0]
+        single_word_embeddings = output['sentence_embedding']
+        input_ids = output['input_ids']
+        loss = self.criterion(single_word_embeddings, w_embedding, torch.tensor(1))
+        loss.backward()
+        gradients = word_embedding_layer.weight.grad
+        gradients = torch.index_select(gradients, 0, input_ids)
+        gradients_columnar = torch.mean(gradients, 1), torch.std(gradients, 1)
+        gradients = gradients.transpose(0, 1)
+        gradients = (gradients - gradients_columnar[0])/gradients_columnar[1]
+        gradients = gradients.transpose(0, 1)
+        scores = torch.sum(torch.abs(gradients), 1).numpy()
+        input_ids = input_ids.numpy()
+        sorted_indices = np.argsort(scores)[::-1]
+        ranked_scores = scores[sorted_indices]
+        thr_index = len([i for i in ranked_scores if i>ranked_scores[0]-np.std(scores)/1.5])
+        sorted_indices = sorted_indices[:thr_index]
+        ranked_ids = input_ids[sorted_indices]
+        ranked_ids_ = []
+        for r in ranked_ids:
+            if r not in ranked_ids_:
+                ranked_ids_.append(r)
+        return ranked_ids_
+
     def extract_relations(
         self,
         docs: Union[str, List[str]],
@@ -372,25 +399,8 @@ class KeyRelBERT:
             words = count.get_feature_names_out()
         else:
             words = count.get_feature_names()
-        for word in words:
-            self.model.embedding_model.zero_grad()
-            word_embedding_layer = self.model.embedding_model.get_submodule('0.auto_model.embeddings.word_embeddings')
-            output = self.model.embed(docs, return_detached=True)[0]
-            single_word_embeddings = output['sentence_embedding']
-            input_ids = output['input_ids']
-            loss = self.criterion(single_word_embeddings, torch.zeros(384))
-            loss.backward()
-            gradients = word_embedding_layer.weight.grad
-            gradients = torch.index_select(gradients, 0, input_ids)
-            gradients_columnar = torch.mean(gradients, 1), torch.std(gradients, 1)
-            gradients = gradients.transpose(0, 1)
-            gradients = (gradients - gradients_columnar[0])/gradients_columnar[1]
-            gradients = gradients.transpose(0, 1)
-            scores = torch.sum(torch.abs(gradients), 1)
-            print(scores)
-            exit()
-        exit()
-        print(type(word_embedding_layer.weight), word_embedding_layer.weight.grad)
-        print(len(words))
-        #print(docs, keywords, doc_embeddings.shape, word_embeddings.shape)
+        for idx, (word_a, w_embedding_a) in enumerate(zip(words, word_embeddings)):
+            for word_b, w_embedding_b in zip(words[idx+1:], word_embeddings[idx+1:]):
+                ranked_ids = self.backpropogate_and_get_words(docs, (w_embedding_a+w_embedding_b)/2)
+                print(word_a, "::", word_b, self.model.embedding_model.tokenizer.convert_ids_to_tokens(ranked_ids))
         exit()
